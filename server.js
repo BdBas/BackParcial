@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { OpenAI } from 'openai';
-import admin from 'firebase-admin';
+import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 
 // Cargar variables de entorno
@@ -10,25 +10,26 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Configuración de Firebase Admin
-const serviceAccount = {
-  type: "service_account",
-  project_id: process.env.FIREBASE_PROJECT_ID,
-  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-  private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-  client_email: process.env.FIREBASE_CLIENT_EMAIL,
-  client_id: process.env.FIREBASE_CLIENT_ID,
-  auth_uri: "https://accounts.google.com/o/oauth2/auth",
-  token_uri: "https://oauth2.googleapis.com/token",
-  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-  client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
-};
+// Configuración de MongoDB
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('Conectado a MongoDB'))
+  .catch(err => console.error('Error conectando a MongoDB:', err));
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+// Modelo para los resultados de trivia
+const triviaResultSchema = new mongoose.Schema({
+  category: String,
+  questions: [{
+    question: String,
+    options: [{
+      text: String,
+      isCorrect: Boolean
+    }]
+  }],
+  score: Number,
+  timestamp: { type: Date, default: Date.now }
 });
 
-const db = admin.firestore();
+const TriviaResult = mongoose.model('TriviaResult', triviaResultSchema);
 
 // Configuración de OpenAI
 const openai = new OpenAI({
@@ -81,13 +82,13 @@ app.post('/api/save-results', async (req, res) => {
   try {
     const { category, questions, score } = req.body;
     
-    await db.collection('triviaResults').add({
+    const triviaResult = new TriviaResult({
       category,
       questions,
-      score,
-      timestamp: admin.firestore.FieldValue.serverTimestamp()
+      score
     });
 
+    await triviaResult.save();
     res.json({ success: true });
   } catch (error) {
     console.error('Error al guardar resultados:', error);
@@ -98,18 +99,9 @@ app.post('/api/save-results', async (req, res) => {
 // Endpoint para obtener historial de resultados
 app.get('/api/results', async (req, res) => {
   try {
-    const snapshot = await db.collection('triviaResults')
-      .orderBy('timestamp', 'desc')
-      .limit(10)
-      .get();
-
-    const results = [];
-    snapshot.forEach(doc => {
-      results.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
+    const results = await TriviaResult.find()
+      .sort({ timestamp: -1 })
+      .limit(10);
 
     res.json(results);
   } catch (error) {
